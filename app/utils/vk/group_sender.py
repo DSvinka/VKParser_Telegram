@@ -29,64 +29,69 @@ class GroupsCheckNewPostsScheduler:
 
     async def groups_check_new_posts(self) -> None:
         while True:
-            async with get_async_session() as session:
-                vk_groups_repository = VKGroupsRepository(session)
-                groups = await vk_groups_repository.get_all()
+            try:
+                async with get_async_session() as session:
+                    vk_groups_repository = VKGroupsRepository(session)
+                    groups = await vk_groups_repository.get_all()
 
-                await asyncio.sleep(len(groups) + int(config['ratelimit']['additional_pause_between_new_posts_check']))
+                    await asyncio.sleep(len(groups) + int(config['ratelimit']['additional_pause_between_new_posts_check']))
 
-                for group in groups:
-                    await asyncio.sleep(int(config['ratelimit']['pause_between_group_request']))
+                    for group in groups:
+                        await asyncio.sleep(int(config['ratelimit']['pause_between_group_request']))
 
-                    response = vk.wall.get(
-                        owner_id="-" + group.vk_id,
-                        count="1",
-                        filter="owner",
-                        extended="1",
-                        offset=0
-                    )
+                        response = vk.wall.get(
+                            owner_id="-" + group.vk_id,
+                            count="1",
+                            filter="owner",
+                            extended="1",
+                            offset=0
+                        )
 
-                    logging.debug(response)
+                        logging.debug(response)
 
-                    try:
-                        if (
-                                str(response["items"][0]["is_pinned"]) == "1"
-                                and
-                                (group.last_post_id is None or int(response["items"][0]["id"]) <= group.last_post_id)
-                        ):
+                        try:
+                            if (
+                                    str(response["items"][0]["is_pinned"]) == "1"
+                                    and
+                                    (group.last_post_id is None or int(response["items"][0]["id"]) <= group.last_post_id)
+                            ):
 
-                            response = vk.wall.get(
-                                owner_id="-" + group.vk_id,
-                                count="1",
-                                filter="owner",
-                                extended="1",
-                                offset=1,
-                            )
-                            logging.debug(response)
+                                response = vk.wall.get(
+                                    owner_id="-" + group.vk_id,
+                                    count="1",
+                                    filter="owner",
+                                    extended="1",
+                                    offset=1,
+                                )
+                                logging.debug(response)
 
-                    except KeyError:
-                        pass
+                        except KeyError:
+                            pass
 
-                    for item in response["items"]:
-                        if (
-                                (group.last_post_id is None or group.last_post_id < int(item["id"]))
-                                and item["marked_as_ads"] != 1
-                                and not item["text"].find("#партнёр") != -1
-                                and not item["text"].find("#ad") != -1
-                                and len(re.findall(r"\w+\|\w+", item["text"])) == 0
-                        ):
-                            try:
-                                await self.send_post_to_telegram(item, group)
-                            except Exception as error:
-                                logging.error(error)
-                                logging.info(item)
+                        for item in response["items"]:
+                            if (
+                                    (group.last_post_id is None or group.last_post_id < int(item["id"]))
+                                    and item["marked_as_ads"] != 1
+                                    and not item["text"].find("#партнёр") != -1
+                                    and not item["text"].find("#ad") != -1
+                                    and len(re.findall(r"\w+\|\w+", item["text"])) == 0
+                            ):
+                                try:
+                                    await self.send_post_to_telegram(item, group)
+                                except Exception as error:
+                                    logging.error(error)
+                                    logging.info(item)
 
-                            vk_groups_repository = VKGroupsRepository(session)
-                            vk_group_update = VKGroupUpdate()
-                            vk_group_update.last_post_id = int(item["id"])
+                                vk_groups_repository = VKGroupsRepository(session)
+                                vk_group_update = VKGroupUpdate()
+                                vk_group_update.last_post_id = int(item["id"])
 
-                            vk_groups_repository.update(group, vk_group_update)
-                            await vk_groups_repository.commit()
+                                vk_groups_repository.update(group, vk_group_update)
+                                await vk_groups_repository.commit()
+
+            except Exception as error:
+                logging.error(f"Scheduler >> Group Sender ERROR: - {error}")
+                logging.error(error, exc_info=True)
 
     async def send_post_to_telegram(self, response, group: "VKGroup"):
         async with get_async_session() as session:
